@@ -1,4 +1,4 @@
-// Huffman File Compressor + Decompressor in C++
+// Huffman File Compressor and Decompressor
 #include <iostream>
 #include <fstream>
 #include <unordered_map>
@@ -8,125 +8,166 @@
 #include <bitset>
 using namespace std;
 
-// Node for Huffman Tree
+// Node structure for Huffman Tree
 struct HuffmanNode {
-    char ch;
-    int freq;
-    HuffmanNode *left, *right;
-    HuffmanNode(char c, int f) : ch(c), freq(f), left(NULL), right(NULL) {}
+    char character;
+    int frequency;
+    HuffmanNode* left;
+    HuffmanNode* right;
+
+    HuffmanNode(char c, int f) : character(c), frequency(f), left(nullptr), right(nullptr) {}
 };
 
-// Custom compare for priority queue
-struct Compare {
+// Comparator for priority queue (min-heap based on frequency)
+struct CompareFrequency {
     bool operator()(HuffmanNode* a, HuffmanNode* b) {
-        return a->freq > b->freq;
+        return a->frequency > b->frequency;
     }
 };
 
-// Recursive function to build codes
-void buildCodes(HuffmanNode* root, string code, unordered_map<char, string>& codes) {
+// Recursively build Huffman codes
+void generateCodes(HuffmanNode* root, string currentCode, unordered_map<char, string>& huffmanCodes) {
     if (!root) return;
+
     if (!root->left && !root->right) {
-        codes[root->ch] = code;
+        huffmanCodes[root->character] = currentCode;
     }
-    buildCodes(root->left, code + "0", codes);
-    buildCodes(root->right, code + "1", codes);
+
+    generateCodes(root->left, currentCode + "0", huffmanCodes);
+    generateCodes(root->right, currentCode + "1", huffmanCodes);
 }
 
-// Compress file
-void compress(const string& inputFile, const string& outputFile, const string& codeFile) {
-    ifstream in(inputFile, ios::binary);
-    unordered_map<char, int> freq;
+// Compress the input file using Huffman Coding
+void compressFile(const string& inputFile, const string& compressedFile, const string& codeFile) {
+    ifstream input(inputFile, ios::binary);
+    if (!input.is_open()) {
+        cerr << "Failed to open input file.\n";
+        return;
+    }
+
+    unordered_map<char, int> frequencyMap;
     char ch;
-    while (in.get(ch)) freq[ch]++;
-    in.clear(); in.seekg(0);
 
-    priority_queue<HuffmanNode*, vector<HuffmanNode*>, Compare> pq;
-    for (auto& p : freq) pq.push(new HuffmanNode(p.first, p.second));
+    // Count character frequencies
+    while (input.get(ch)) {
+        frequencyMap[ch]++;
+    }
 
-    while (pq.size() > 1) {
-        HuffmanNode *left = pq.top(); pq.pop();
-        HuffmanNode *right = pq.top(); pq.pop();
-        HuffmanNode *merged = new HuffmanNode('\0', left->freq + right->freq);
+    // Rewind input stream
+    input.clear();
+    input.seekg(0);
+
+    // Build priority queue (min-heap)
+    priority_queue<HuffmanNode*, vector<HuffmanNode*>, CompareFrequency> minHeap;
+    for (const auto& [character, freq] : frequencyMap) {
+        minHeap.push(new HuffmanNode(character, freq));
+    }
+
+    // Build Huffman Tree
+    while (minHeap.size() > 1) {
+        HuffmanNode* left = minHeap.top(); minHeap.pop();
+        HuffmanNode* right = minHeap.top(); minHeap.pop();
+        HuffmanNode* merged = new HuffmanNode('\0', left->frequency + right->frequency);
         merged->left = left;
         merged->right = right;
-        pq.push(merged);
+        minHeap.push(merged);
     }
 
-    HuffmanNode* root = pq.top();
-    unordered_map<char, string> codes;
-    buildCodes(root, "", codes);
+    HuffmanNode* root = minHeap.top();
+    unordered_map<char, string> huffmanCodes;
+    generateCodes(root, "", huffmanCodes);
 
-    ofstream out(outputFile, ios::binary);
-    string encoded;
-    while (in.get(ch)) encoded += codes[ch];
+    // Encode input file
+    string encodedString;
+    while (input.get(ch)) {
+        encodedString += huffmanCodes[ch];
+    }
+    input.close();
 
-    int extraBits = 8 - (encoded.size() % 8);
-    if (extraBits == 8) extraBits = 0;
-    for (int i = 0; i < extraBits; ++i) encoded += '0';
-
-    out.put(extraBits);
-    for (size_t i = 0; i < encoded.size(); i += 8) {
-        bitset<8> b(encoded.substr(i, 8));
-        out.put((char)b.to_ulong());
+    // Add padding bits if necessary
+    int paddingBits = 8 - (encodedString.length() % 8);
+    if (paddingBits != 8) {
+        encodedString.append(paddingBits, '0');
+    } else {
+        paddingBits = 0;
     }
 
+    // Write compressed binary file
+    ofstream output(compressedFile, ios::binary);
+    output.put(static_cast<char>(paddingBits)); // Store padding information
+
+    for (size_t i = 0; i < encodedString.size(); i += 8) {
+        bitset<8> byte(encodedString.substr(i, 8));
+        output.put(static_cast<char>(byte.to_ulong()));
+    }
+    output.close();
+
+    // Write code map to file
     ofstream codeOut(codeFile);
-    for (auto& p : codes) {
-        if (p.first == '\n') codeOut << "\\n " << p.second << '\n';
-        else if (p.first == ' ') codeOut << "space " << p.second << '\n';
-        else codeOut << p.first << " " << p.second << '\n';
+    for (const auto& [character, code] : huffmanCodes) {
+        if (character == '\n') codeOut << "\\n " << code << '\n';
+        else if (character == ' ') codeOut << "space " << code << '\n';
+        else codeOut << character << " " << code << '\n';
     }
+    codeOut.close();
 
-    in.close(); out.close(); codeOut.close();
-    cout << "Compression complete!\n";
+    cout << "Compression complete.\n";
 }
 
-// Decompress file
-void decompress(const string& inputFile, const string& codeFile, const string& outputFile) {
-    unordered_map<string, char> reverseCodes;
+// Decompress the Huffman-encoded file
+void decompressFile(const string& compressedFile, const string& codeFile, const string& outputFile) {
+    unordered_map<string, char> codeToChar;
+
+    // Load Huffman codes from file
     ifstream codeIn(codeFile);
     string line;
     while (getline(codeIn, line)) {
-        size_t space = line.find(' ');
-        string key = line.substr(0, space);
-        string val = line.substr(space + 1);
-        char realKey = (key == "\\n") ? '\n' : (key == "space") ? ' ' : key[0];
-        reverseCodes[val] = realKey;
+        size_t splitIndex = line.find(' ');
+        string symbol = line.substr(0, splitIndex);
+        string code = line.substr(splitIndex + 1);
+        char character = (symbol == "\\n") ? '\n' : (symbol == "space") ? ' ' : symbol[0];
+        codeToChar[code] = character;
     }
     codeIn.close();
 
-    ifstream in(inputFile, ios::binary);
-    int padding = in.get();
-    string bits = "";
-    char ch;
-    while (in.get(ch)) {
-        bitset<8> b((unsigned char)ch);
-        bits += b.to_string();
-    }
-    in.close();
+    // Read compressed binary data
+    ifstream input(compressedFile, ios::binary);
+    int paddingBits = input.get();
+    string bitStream;
 
-    bits = bits.substr(0, bits.size() - padding);
-    string current = "";
-    ofstream out(outputFile);
-    for (char bit : bits) {
-        current += bit;
-        if (reverseCodes.count(current)) {
-            out.put(reverseCodes[current]);
-            current = "";
+    char byte;
+    while (input.get(byte)) {
+        bitset<8> bits(static_cast<unsigned char>(byte));
+        bitStream += bits.to_string();
+    }
+    input.close();
+
+    // Remove padding bits
+    bitStream = bitStream.substr(0, bitStream.size() - paddingBits);
+
+    // Decode bitstream using the code map
+    ofstream output(outputFile);
+    string currentCode;
+    for (char bit : bitStream) {
+        currentCode += bit;
+        if (codeToChar.count(currentCode)) {
+            output.put(codeToChar[currentCode]);
+            currentCode.clear();
         }
     }
-    out.close();
-    cout << "Decompression complete!\n";
+    output.close();
+
+    cout << "Decompression complete.\n";
 }
 
 int main() {
-    string input = "input.txt";
-    string compressed = "output.huff";
-    string codes = "codes.txt";
-    string decompressed = "decoded.txt";
+    string inputFilename = "input.txt";
+    string compressedFilename = "compressed.huff";
+    string codeMapFilename = "codes.txt";
+    string outputFilename = "decompressed.txt";
 
-    compress(input, compressed, codes);
-    decompress(compressed, codes, decompressed);
+    compressFile(inputFilename, compressedFilename, codeMapFilename);
+    decompressFile(compressedFilename, codeMapFilename, outputFilename);
+
     return 0;
 }
